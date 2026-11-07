@@ -1,0 +1,20 @@
+name: terraform-apply-production
+# Manual, and the `production` GitHub Environment requires your approval before this job starts.
+on:
+  workflow_dispatch:
+concurrency: { group: terraform-production, cancel-in-progress: false }
+permissions: { id-token: write, contents: read }
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: production  # environment variable TF_APPLY_ROLE_ARN = lontong-tf-apply-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: "${{ vars.TF_APPLY_ROLE_ARN }}", aws-region: ap-southeast-1 }
+      - working-directory: environments/production
+        run: |
+          terraform init -input=false -backend-config="bucket=${{ vars.STATE_BUCKET }}"
+          terraform plan -input=false -out=tfplan -no-color
+          terraform apply -input=false tfplan
