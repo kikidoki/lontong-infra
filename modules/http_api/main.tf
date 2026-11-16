@@ -58,15 +58,14 @@ variable "log_retention_days" {
   default = 14
 }
 
-variable "custom_domain" {
-  type    = string
-  default = null
+variable "custom_domain_name" {
+  type        = string
+  description = "e.g. api.lontongbandung.online. Required: the default execute-api URL is disabled, so this is the only way in."
 }
 
-variable "certificate_arn" {
+variable "acm_certificate_arn" {
   type        = string
-  default     = null
-  description = "ACM certificate (same region) for custom_domain; validate its DNS record where your DNS lives."
+  description = "ACM certificate for custom_domain_name, in the SAME region as the API (ap-southeast-1)."
 }
 
 locals {
@@ -77,6 +76,10 @@ locals {
 resource "aws_apigatewayv2_api" "this" {
   name          = var.name
   protocol_type = "HTTP"
+
+  # Bots cannot call https://<id>.execute-api.<region>.amazonaws.com directly: the only way in is the custom domain
+  # (behind Cloudflare, which adds the secret header the API checks).
+  disable_execute_api_endpoint = true
 
   dynamic "cors_configuration" {
     for_each = length(var.cors_origins) > 0 ? [1] : []
@@ -169,19 +172,17 @@ resource "aws_lambda_permission" "invoke" {
 }
 
 resource "aws_apigatewayv2_domain_name" "this" {
-  count       = var.custom_domain == null ? 0 : 1
-  domain_name = var.custom_domain
+  domain_name = var.custom_domain_name
   domain_name_configuration {
-    certificate_arn = var.certificate_arn
+    certificate_arn = var.acm_certificate_arn
     endpoint_type   = "REGIONAL"
     security_policy = "TLS_1_2"
   }
 }
 
 resource "aws_apigatewayv2_api_mapping" "this" {
-  count       = var.custom_domain == null ? 0 : 1
   api_id      = aws_apigatewayv2_api.this.id
-  domain_name = aws_apigatewayv2_domain_name.this[0].id
+  domain_name = aws_apigatewayv2_domain_name.this.id
   stage       = aws_apigatewayv2_stage.default.id
 }
 
@@ -189,11 +190,12 @@ output "api_id" {
   value = aws_apigatewayv2_api.this.id
 }
 
-output "api_url" {
-  value = aws_apigatewayv2_api.this.api_endpoint
+output "target_domain_name" {
+  description = "Point your Cloudflare DNS CNAME for custom_domain_name at this (proxied)."
+  value       = aws_apigatewayv2_domain_name.this.domain_name_configuration[0].target_domain_name
 }
 
-output "custom_domain_target" {
-  description = "Point your DNS CNAME at this when custom_domain is set"
-  value       = var.custom_domain == null ? null : aws_apigatewayv2_domain_name.this[0].domain_name_configuration[0].target_domain_name
+output "hosted_zone_id" {
+  description = "Route 53 alias zone id of the regional endpoint (not needed for Cloudflare CNAMEs; exposed for completeness)."
+  value       = aws_apigatewayv2_domain_name.this.domain_name_configuration[0].hosted_zone_id
 }

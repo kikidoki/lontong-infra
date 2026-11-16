@@ -1,6 +1,6 @@
 output "api_url" {
-  description = "Base URL of the API (set as the API_URL variable in the app repo's GitHub environment)"
-  value       = module.http_api.api_url
+  description = "Public API base URL (the default execute-api URL is disabled). Set as API_URL in the app repo's GitHub environment."
+  value       = "https://${var.custom_domain_name}"
 }
 
 output "lambda_function_name" {
@@ -20,6 +20,11 @@ output "ssm_prefix" {
   value = local.ssm_prefix
 }
 
-output "custom_domain_target" {
-  value = module.http_api.custom_domain_target
+output "target_domain_name" {
+  description = "Cloudflare DNS: CNAME <custom_domain_name> -> this value, proxied (orange cloud)"
+  value       = module.http_api.target_domain_name
+}
+
+output "hosted_zone_id" {
+  value = module.http_api.hosted_zone_id
 }

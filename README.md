@@ -96,6 +96,22 @@ GitHub settings for **lontong-stack**: environments `staging` and `production` (
 `AWS_REGION`, `AWS_DEPLOY_ROLE_ARN` (output `deploy_role_arn`), `ECR_REPOSITORY` (`lontong-api`), `LAMBDA_FUNCTION_NAME`, `API_URL` (output `api_url`).
 From then on: merge to `main` => staging deploys automatically; production is a manual, approved promotion of the same image digest.
 
+## Origin lock (Cloudflare -> API Gateway)
+The default `execute-api` URL is **disabled** (`disable_execute_api_endpoint = true`): the API is reachable only through `custom_domain_name`, and the app
+answers **403** unless the request carries the header `x-custom-secret`. Open without it: `/healthz` only (plus `/docs` and `/openapi.json` in local/dev).
+`/readyz` is protected on purpose (it queries the database, so anonymous spam would wake Neon).
+1. Set `custom_domain_name` and `acm_certificate_arn` in each environment's tfvars (both required; ACM certificate in ap-southeast-1, validated through Cloudflare DNS).
+2. `terraform apply` creates the secret: `random_password` -> SSM `/lontong/<env>/API_SECRET_KEY`; the Lambda's cold-start loader exposes it as the env var `API_SECRET_KEY`
+   (it is not copied into the Lambda configuration). It does live in Terraform state, so keep the state bucket private.
+3. Cloudflare (manual): proxied CNAME `<custom_domain_name>` -> output `target_domain_name`; SSL/TLS mode *Full (strict)*; a **Transform Rule -> Modify Request Header**
+   that sets static `x-custom-secret` to `aws ssm get-parameter --name /lontong/<env>/API_SECRET_KEY --with-decryption --query Parameter.Value --output text`,
+   limited to that hostname; plus rate-limiting rules for `/api/v1/auth/login` and `/api/v1/public/track/*`.
+4. **Rollout order matters**: add the Cloudflare header rule *before* the new backend version serves traffic, otherwise legitimate requests get 403.
+   Point the GitHub `API_URL` variable (the smoke test calls `/readyz`) and the Vercel rewrite at `https://<custom_domain_name>`, never at the old execute-api URL.
+5. Rotate: `./scripts/tf.sh <env> apply -replace=random_password.api_secret_key`, publish a new Lambda version, update the Cloudflare rule (expect a brief window of 403s).
+Limits to know: the check runs inside the Lambda, so a blocked request still costs one API Gateway request and one invocation (cents; throttling bounds it). What keeps bots away
+from AWS in the first place is the disabled default endpoint plus Cloudflare rate limiting. Someone who discovers the regional target domain can still reach API Gateway, but gets 403 from the app.
+
 ## Day-2 operations
 | Task | How |
 |---|---|
@@ -113,4 +129,4 @@ From then on: merge to `main` => staging deploys automatically; production is a 
 * *`/readyz` returns 503*: database URL wrong or Neon unreachable; look at `/aws/lambda/lontong-<env>-api` logs. First request after idle is slower (Neon wakes, Lambda cold start).
 * *App fails at startup with "JWT_SECRET must be set"*: the SSM parameter is still `__UNSET__`.
 * *Python 3.14 images*: keep the image on 3.13 for now; Mangum relies on `asyncio.get_event_loop()`, which 3.14 no longer provides without a running loop.
-* *Custom domain*: create the ACM certificate in ap-southeast-1, validate it at your DNS provider, set `custom_domain` + `certificate_arn`, then CNAME to the `custom_domain_target` output. Vercel can instead proxy `/api/*` to the API URL (same-origin: no CORS, cookies just work).
+* *403 on everything*: the `x-custom-secret` header is missing or wrong. Check the Cloudflare Transform Rule and compare it with SSM `/lontong/<env>/API_SECRET_KEY`.

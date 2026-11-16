@@ -28,6 +28,23 @@ module "secrets" {
   ]
 }
 
+# Origin lock: Cloudflare injects this value as the `x-custom-secret` request header and the API answers 403 without it.
+# Stored under the app's SSM prefix, so the Lambda's existing cold-start loader exposes it as the env var API_SECRET_KEY
+# (Lambda environment variables cannot reference SSM, and putting the value there would show it in the console).
+# NOTE: random_password keeps the value in Terraform state: keep the state bucket private (bootstrap/ already does).
+# Rotate: terraform apply -replace=random_password.api_secret_key, publish a new Lambda version, update the Cloudflare rule.
+resource "random_password" "api_secret_key" {
+  length  = 48
+  special = false # header-safe: letters and digits only
+}
+
+resource "aws_ssm_parameter" "api_secret_key" {
+  name        = "${local.ssm_prefix}/API_SECRET_KEY"
+  description = "Shared secret Cloudflare sends as x-custom-secret"
+  type        = "SecureString"
+  value       = random_password.api_secret_key.result
+}
+
 module "archive_bucket" {
   source = "../../modules/archive_bucket"
   name   = "${local.name}-archives-${data.aws_caller_identity.current.account_id}"
@@ -35,6 +52,7 @@ module "archive_bucket" {
 
 module "api_lambda" {
   source               = "../../modules/lambda_container"
+  depends_on           = [aws_ssm_parameter.api_secret_key]
   name                 = "${local.name}-api"
   image_uri            = var.image_uri
   memory_mb            = var.lambda_memory_mb
@@ -63,8 +81,8 @@ module "http_api" {
   throttle_rate           = var.throttle_rate
   throttle_burst          = var.throttle_burst
   log_retention_days      = var.log_retention_days
-  custom_domain           = var.custom_domain
-  certificate_arn         = var.certificate_arn
+  custom_domain_name      = var.custom_domain_name
+  acm_certificate_arn     = var.acm_certificate_arn
 }
 
 module "observability" {

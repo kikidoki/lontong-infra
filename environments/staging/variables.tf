@@ -67,12 +67,12 @@ variable "log_retention_days" {
   default = 14
 }
 
-variable "custom_domain" {
-  type    = string
-  default = null
+variable "custom_domain_name" {
+  type        = string
+  description = "API hostname served through Cloudflare, e.g. api.lontongbandung.online"
 }
 
-variable "certificate_arn" {
-  type    = string
-  default = null
+variable "acm_certificate_arn" {
+  type        = string
+  description = "ACM certificate for custom_domain_name (ap-southeast-1)"
 }
